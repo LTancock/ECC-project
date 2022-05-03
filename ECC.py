@@ -69,32 +69,166 @@ def test(word, pcMat, synTable, n, d, p):
     errorBit = synDecode(synTable, synWord)
     #print(errorBit)
     #print(wordE)
-    if errorBit >= 0:
-        wordE[errorBit] = (wordE[errorBit] != 1)
+
+    
     #print(word)
     #print(wordE)
+    if errorBit >= 0:
+        wordE[errorBit] = (wordE[errorBit] != 1)
+    
     return ([np.array_equal(wordE, word), errorBit])
 
+def move(msg, dir):
+    newMsg = np.copy(msg)
+    #print("move first msg",newMsg)
+    #print("move dir", dir)
+    if (dir):
+        i = len(newMsg) - 1
+        newMsg[i] = 0 if newMsg[i] == 1 else 1
+        #carry happened
+        while(newMsg[i] == 0):
+            if i > 0:
+                newMsg[i-1] = 0 if newMsg[i-1] == 1 else 1
+            else:
+                break
+            i = i - 1
+    else:
+        i = len(newMsg) - 1
+        newMsg[i] = 0 if newMsg[i] == 1 else 1
+        
+        #carry happened
+        while(newMsg[i] == 1):
+            if i > 0:
+                newMsg[i-1] = 0 if newMsg[i-1] == 1 else 1
+            else:
+                break
+            i = i - 1
+    #print("move second message", newMsg)
+    return newMsg
+                        
+
+#models random walk, with [0,0,0,0] -> [1,1,1,1] when going down and vice-versa
+def nextMsg(msg, maxStep):
+    #picks 0 = down or 1 = up
+    dir = np.random.randint(0,2)
+    newMsg = move(msg, dir)
+    return newMsg
+
 def fullTest(genMat, n, k, d, p, tests):
-    #run test tests times and return data for plotting
-    word = genMat[0]
+    #run test and return data for plotting
+    msg = [0,0,0,0]
+    word = np.matmul(msg, genMat)%2
     pcMat = genToPc(genMat, n, k)
     synTable = generateSynTable(n,d,pcMat)
     data = np.empty(tests)
+    numErrors = tests
     for i in range(0, tests):
         data[i] = test(word, pcMat, synTable, n, d, p)[0]
+        msg = nextMsg(msg, 1)
+        word = np.matmul(msg, genMat)%2
+        numErrors -= data[i]
+    print(numErrors) 
     return data
 
+#word a and b should have same length
+def hammingDist(worda, wordb):
+    dist = 0
+    for i in range(0, len(worda)):
+        if worda[i] != wordb[i]: dist += 1
+    return dist
+
+#experiment with looking at before error correction and after
+def markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p):
+    #print("oldMsg", oldMsg)
+    downMsg = move(oldMsg, 0)
+    #print("oldMsg", oldMsg)
+    #print("d", downMsg)
+    upMsg = move(oldMsg, 1)
+    #print("oldMsg", oldMsg)
+    #print("u", upMsg)
+    downWord = np.matmul(downMsg, genMat)%2
+    upWord = np.matmul(upMsg, genMat)%2
+    wordE = generateErrors(word, n, p, 0)
+    synWord = np.matmul(pcMat, wordE)%2
+    errorBit = synDecode(synTable, synWord)
+    if errorBit >= 0:
+        wordE[errorBit] = (wordE[errorBit] != 1)
+    corWord = downWord
+    if np.array_equal(wordE, upWord): corWord = upWord
+    downDist = hammingDist(wordE, downWord)
+    upDist = hammingDist(wordE, upWord)
+    #print(oldMsg)
+    #print(upMsg)
+    #print(downMsg)
+    #print(word)
+    #print(upWord)
+    #print(downWord)
+    #return ([np.array_equal(wordE, word), np.array_equal(corWord, word), wordE])
+    return ([np.array_equal(wordE, word), np.array_equal(corWord, word), np.array_equal(upWord, wordE) if upDist < downDist else np.array_equal(downWord, wordE), wordE])
+
+#run markov test and return data for plotting
+#currently using correct previous msg rather than decoded (not necessarily correct) previous message
+def fullMarkovTest(genMat, n, k, d, p, tests):
+    msg = [0,0,0,0]
+    word = np.matmul(msg, genMat)%2
+    pcMat = genToPc(genMat, n, k)
+    synTable = generateSynTable(n,d,pcMat)
+    data = np.empty(tests)
+    assistData = np.empty(tests)
+    mData = np.empty(tests)
+    numErrors = tests
+    numMErrors = tests
+    oldMsg = msg
+    oldWord = word
+    for i in range(0, tests):
+        #print(msg)
+        #print(word)
+        #data[i] = test(word, pcMat, synTable, n, d, p)[0]
+        if i == 0:
+            data[i] = mData[i] = test(word, pcMat, synTable, n, d, p)[0]
+            #mData[i] = test(word, pcMat, synTable, n, d, p)[0]
+        else: 
+            #print("msg", msg)
+            data[i], assistData[i], mData[i], oldWord = markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p)
+            #data[i], mData[i], oldWord = markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p)
+            #mData[i] = markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p)[1]
+            #data[i] = test(word, pcMat, synTable, n, d, p)[0]
+            #oldMsg = msg
+            #oldWord = word
+        #oldWord = mData[2]
+        oldMsg = oldWord[0:4]
+        #print(oldWord)
+        #print(oldMsg)
+        msg = nextMsg(msg, 1)
+        word = np.matmul(msg, genMat)%2
+        numErrors -= data[i]
+        numMErrors -= mData[i]
+    print(numErrors)
+    print(numMErrors)
+    return ([data, mData])
+
+#Hamming code and contextual decoding implemented
+#Hamming code is better, but we can combine the 2 since we know when we aren't correct (>1 error)
+#Therefore, we can theoretically use the hamming code, and if there is more than 2 errors then we can use the contextualised
 def main():
     n = 7
     k = 4
     d = 3
-    p = 0.3
+    p = 0.1
+    tests = 1000
     #word = np.array([1, 0, 0, 0, 1, 1, 0])
     #word = generateErrors(word, n, p, 1)
     genMat = np.array([[1, 0, 0, 0, 1, 1, 0], [0, 1, 0, 0, 1, 0, 1], [0, 0, 1, 0, 0, 1, 1], [0, 0, 0, 1, 1, 1, 1]])
-    data = fullTest(genMat, n, k, d, p, 10)
+    data, mData = fullMarkovTest(genMat, n, k, d, p, tests)
     print(data)
+    print(mData)
+    counter = 0
+    for i in range(0, tests-1):
+        if(data[i] == 0):
+            if(mData[i]==1): counter += 1
+    print(counter)
+
+
     #pcMat = np.array([[1, 1, 0, 1, 1, 0, 0], [1, 0, 1, 1, 0, 1, 0], [0, 1, 1, 1, 0, 0, 1]])
     #print(pcMat)
     #pcMat = genToPc(genMat, n, k)
