@@ -1,6 +1,6 @@
 import numpy as np
 import math
-import matplotlib
+from matplotlib import pyplot as plt
 
 #errorCap is for testing only in scenarios when the number of errors is <= number of errors that can be corrected
 #otherwise just put it to be 0, where it will allow any number of errors
@@ -138,7 +138,8 @@ def hammingDist(worda, wordb):
     return dist
 
 #experiment with looking at before error correction and after
-def markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p):
+#deprecated
+def markovTest(word, wordE, oldMsg, genMat, pcMat, synTable, n, d, p):
     #print("oldMsg", oldMsg)
     downMsg = move(oldMsg, 0)
     #print("oldMsg", oldMsg)
@@ -157,55 +158,161 @@ def markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p):
     if np.array_equal(wordE, upWord): corWord = upWord
     downDist = hammingDist(wordE, downWord)
     upDist = hammingDist(wordE, upWord)
-    #print(oldMsg)
-    #print(upMsg)
-    #print(downMsg)
-    #print(word)
-    #print(upWord)
-    #print(downWord)
     #return ([np.array_equal(wordE, word), np.array_equal(corWord, word), wordE])
     return ([np.array_equal(wordE, word), np.array_equal(corWord, word), np.array_equal(upWord, wordE) if upDist < downDist else np.array_equal(downWord, wordE), wordE])
 
+#generate error outside and pass in
+#separate oldMsg to collateTest
+def MBCTest(word, oldMsg, genMat, n, p):
+    downMsg = move(oldMsg, 0)
+    upMsg = move(oldMsg, 1)
+    downWord = np.matmul(downMsg, genMat)%2
+    upWord = np.matmul(upMsg, genMat)%2
+    wordE = generateErrors(word, n, p, 0)
+    corWord = downWord
+    downDist = hammingDist(wordE, downWord)
+    upDist = hammingDist(wordE, upWord)
+    if (upDist < downDist):
+        corWord = upWord
+    return ([np.array_equal(word, corWord), corWord])
+
+#if MBC result used k times in a row trust hamming for next word
+def collateTest(word, oldMsg, genMat, pcMat, synTable, n, p):
+    downMsg = move(oldMsg, 0)
+    upMsg = move(oldMsg, 1)
+    downWord = np.matmul(downMsg, genMat)%2
+    upWord = np.matmul(upMsg, genMat)%2
+    wordE = generateErrors(word, n, p, 0)
+    synWord = np.matmul(pcMat, wordE)%2
+    errorBit = synDecode(synTable, synWord)
+    downDist = hammingDist(wordE, downWord)
+    upDist = hammingDist(wordE, upWord)
+    corWord = downWord
+    if upDist < downDist: corWord = upWord
+    if errorBit >= 0:
+        wordE[errorBit] = (wordE[errorBit] != 1)
+    ham = False
+    if np.array_equal(wordE, upWord) or np.array_equal(wordE, downWord):
+        ham = True
+    #print(word)
+    #print(wordE)
+    #print(corWord)
+    #print(ham)
+    #print(" ")
+    return ([np.array_equal(word, wordE), np.array_equal(word, wordE) if ham else np.array_equal(word, corWord), wordE if ham else corWord, ham])
+    #return hamming = np.array_equal(word, wordE), coll = if wordE == upWord or downWord then np.array_equal(word, wordE)
+            #else np.array_equal(word, corWord), oldMsg = if wordE == upWord or downWord then wordE else corWord
+    
+def hammingTest(word, pcMat, synTable, n, p):
+    wordE = generateErrors(word, n, p, 0)
+    synWord = np.matmul(pcMat, wordE)%2
+    errorBit = synDecode(synTable, synWord)
+    if errorBit >= 0:
+        wordE[errorBit] = (wordE[errorBit] != 1)
+    return ([np.array_equal(word, wordE), wordE])
+
 #run markov test and return data for plotting
 #currently using correct previous msg rather than decoded (not necessarily correct) previous message
-def fullMarkovTest(genMat, n, k, d, p, tests):
+def fullMarkovTest(genMat, n, k, d, p, tests, MBCLim):
     msg = [0,0,0,0]
     word = np.matmul(msg, genMat)%2
+    #wordE = generateErrors(word, n, p, 0)
     pcMat = genToPc(genMat, n, k)
     synTable = generateSynTable(n,d,pcMat)
     data = np.empty(tests)
-    assistData = np.empty(tests)
+    #assistData = np.empty(tests)
     mData = np.empty(tests)
-    numErrors = tests
-    numMErrors = tests
+    cData = np.empty(tests)
+    numSucc = 0
+    numMSucc = 0
+    numCSucc = 0
     oldMsg = msg
+    oldMsgC = msg
     oldWord = word
+    oldWordC = word
+    #limit for how many MBCs will be trusted in a row before it will trust Hamming to reset bad string
+    MBC = 0
     for i in range(0, tests):
         #print(msg)
         #print(word)
         #data[i] = test(word, pcMat, synTable, n, d, p)[0]
         if i == 0:
-            data[i] = mData[i] = test(word, pcMat, synTable, n, d, p)[0]
+            temp = hammingTest(word, pcMat, synTable, n, p)
+            data[i] = mData[i] = cData[i] = temp[0]
+            oldWord = oldWordC = temp[1]
+            #data[i] = mData[i] = test(word, pcMat, synTable, n, d, p)[0]
             #mData[i] = test(word, pcMat, synTable, n, d, p)[0]
         else: 
-            #print("msg", msg)
-            data[i], assistData[i], mData[i], oldWord = markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p)
-            #data[i], mData[i], oldWord = markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p)
-            #mData[i] = markovTest(word, oldMsg, genMat, pcMat, synTable, n, d, p)[1]
-            #data[i] = test(word, pcMat, synTable, n, d, p)[0]
-            #oldMsg = msg
-            #oldWord = word
+            #Passing in error word from outside makes it bad???
+            mData[i], oldWord = MBCTest(word, oldMsg, genMat, n, p)
+            if (MBC < MBCLim):
+                data[i], cData[i], oldWordC, ham = collateTest(word, oldMsgC, genMat, pcMat, synTable, n, p)
+                if ham:
+                    MBC = 0
+                else:
+                    MBC += 1
+            else:
+                temp = hammingTest(word, pcMat, synTable, n, p)
+                data[i] = cData[i] = temp[0]
+                oldWordC = temp[1]
+                MBC = 0
         #oldWord = mData[2]
+
         oldMsg = oldWord[0:4]
+        oldMsgC = oldWordC[0:4]
         #print(oldWord)
         #print(oldMsg)
         msg = nextMsg(msg, 1)
         word = np.matmul(msg, genMat)%2
-        numErrors -= data[i]
-        numMErrors -= mData[i]
-    print(numErrors)
-    print(numMErrors)
-    return ([data, mData])
+        numSucc += data[i]
+        numMSucc += mData[i]
+        numCSucc += cData[i]
+    print("Hamming s", numSucc)
+    print("MBC s", numMSucc)
+    print("Combined s", numCSucc)
+    return ([data, mData, cData, numSucc, numMSucc, numCSucc])
+
+#success prob vs prob of error, line graph with each of the 3
+#success prob of combined vs MBCLim
+def plot_succ_v_err(data, mData, cData, p_arr, tests):
+    #print(numStep)
+    #for i in range(0, len(data)):
+    #    data[i] = data[i]/tests
+    #    mData[i] = mData[i]/tests
+    #    cData[i] = cData[i]/tests
+    #x = np.empty(numStep)
+    #for i in range(0, numStep):
+    #    x[i] = start + (step * i)
+    plt.title("Success probability vs probability of error for each bit")
+    plt.plot(p_arr, data/tests, c = "r", marker = "o", label = "Hamming code")
+    plt.plot(p_arr, mData/tests, c = "b", marker = "o", label = "MBC algorithm")
+    plt.plot(p_arr, cData/tests, c = "g", marker = "o", label = "Combined algorithm")
+    plt.xlabel("Probability of error for each bit")
+    plt.ylabel("Probability for the algorithm to match the sent word")
+    plt.legend(loc="upper right")
+    plt.show()
+
+def plot_noSucc_v_err(data, mData, cData, p_arr):
+    
+    plt.title("Number of successes vs probability of error for each bit")
+    plt.plot(p_arr, data, c = "r", marker = "o", label = "Hamming code")
+    plt.plot(p_arr, mData, c = "b", marker = "o", label = "MBC algorithm")
+    plt.plot(p_arr, cData, c = "g", marker = "o", label = "Combined algorithm")
+    plt.xlabel("Probability of error for each bit")
+    plt.ylabel("Number of times the algorithm output was correct")
+    plt.legend(loc="lower right")
+    plt.show()
+
+#prob 0.05
+def plot_succ_v_MBCLim(data, cData, lims, tests):
+    plt.title("Success probability vs value of MBCLim")
+    plt.plot(lims, data/tests, c = "r", marker = "o", label = "Hamming code")
+    plt.plot(lims, cData/tests, c = "g", marker = "o", label = "Combined algorithm")
+    plt.xlabel("Number of times MBC is relied on before trusting hamming code")
+    plt.ylabel("Probability for the algorithm to match the sent word")
+    plt.legend(loc = "lower right")
+    plt.show()
+
 
 #Hamming code and contextual decoding implemented
 #Hamming code is better, but we can combine the 2 since we know when we aren't correct (>1 error)
@@ -215,18 +322,39 @@ def main():
     k = 4
     d = 3
     p = 0.1
-    tests = 1000
+    MBCLim = 2
+    size = 20
+    p_arr = np.empty(size)
+    MBCLim_arr = np.empty(size)
+    for i in range (0, len(p_arr)):
+        p_arr[i] = i * 0.05
+        MBCLim_arr[i] = i
+    tests = 100
+    #print(MBCLim_arr[0], MBCLim_arr[2])
     #word = np.array([1, 0, 0, 0, 1, 1, 0])
     #word = generateErrors(word, n, p, 1)
     genMat = np.array([[1, 0, 0, 0, 1, 1, 0], [0, 1, 0, 0, 1, 0, 1], [0, 0, 1, 0, 0, 1, 1], [0, 0, 0, 1, 1, 1, 1]])
-    data, mData = fullMarkovTest(genMat, n, k, d, p, tests)
-    print(data)
-    print(mData)
-    counter = 0
-    for i in range(0, tests-1):
-        if(data[i] == 0):
-            if(mData[i]==1): counter += 1
-    print(counter)
+    data = np.empty(size)
+    mData = np.empty(size)
+    cData = np.empty(size)
+    
+    for i in range(0, len(data)):
+        rawdata, rawmData, rawcData, data[i], mData[i], cData[i] = fullMarkovTest(genMat, n, k, d, p_arr[i], tests, MBCLim)
+    plot_succ_v_err(data, mData, cData, p_arr, tests)
+    #plot_noSucc_v_err(data, mData, cData, p_arr)
+
+    #for i in range(0, len(data)):
+    #    rawdata, rawmData, rawcData, data[i], mData[i], cData[i] = fullMarkovTest(genMat, n, k, d, p, tests, MBCLim_arr[i])
+    #plot_succ_v_MBCLim(data, cData, MBCLim_arr, tests)
+
+    #print(data)
+    #print(mData)
+    #print(cData)
+    #counter = 0
+    #for i in range(0, tests-1):
+    #    if(data[i] == 0):
+    #        if(mData[i]==1): counter += 1
+    #print(counter)
 
 
     #pcMat = np.array([[1, 1, 0, 1, 1, 0, 0], [1, 0, 1, 1, 0, 1, 0], [0, 1, 1, 1, 0, 0, 1]])
